@@ -17,15 +17,16 @@
     .invoice-block { border: 1px solid #000; padding: 10px; margin-bottom: 20px; }
     .invoice-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
     .invoice-title { font-size: 18px; font-weight: bold; text-align: center; margin-bottom: 10px; }
-    .stamp-box { border: 1px solid #000; width: 100px; height: 80px; text-align: center; line-height: 80px; float: right; margin-top: 10px; }
     .invoice-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
     .invoice-table th, .invoice-table td { border: 1px solid #000; padding: 6px; text-align: left; }
-    .invoice-footer { margin-top: 10px; }
   </style>
 </head>
 <body>
   <h3>福祉タクシー 利用料計算</h3>
   <input id="origin" type="text" placeholder="出発地" />
+  <input id="waypoint1" type="text" placeholder="経由地1（任意）" />
+  <input id="waypoint2" type="text" placeholder="経由地2（任意）" />
+  <input id="waypoint3" type="text" placeholder="経由地3（任意）" />
   <input id="destination" type="text" placeholder="目的地" />
   <label>出発予定時刻：<input type="time" id="rideTime" value="10:00"></label>
 
@@ -49,21 +50,25 @@
     <option value="1.5">90分</option>
     <option value="2">120分</option>
   </select>
+
   <div class="radio-group">
     <label>階段昇降介助（2名体制）:</label><br>
     <label><input type="radio" name="stairsSupport" value="yes"> あり</label>
     <label><input type="radio" name="stairsSupport" value="no" checked> なし</label>
   </div>
+
   <div class="radio-group">
     <label>貸し出し車椅子（1台まで無料）:</label><br>
     <label><input type="radio" name="wheelchair" value="yes"> 使用する</label>
     <label><input type="radio" name="wheelchair" value="no" checked> 使用しない</label>
   </div>
+
   <div class="radio-group">
     <label>ストレッチャー使用:</label><br>
     <label><input type="radio" name="stretcher" value="yes"> 使用する</label>
     <label><input type="radio" name="stretcher" value="no" checked> 使用しない</label>
   </div>
+
   <button onclick="calculateFare()">運賃を計算する</button>
   <div id="result"></div>
   <div id="details"></div>
@@ -84,6 +89,7 @@
       </div>
       <table class="invoice-table" id="invoice-table"></table>
     </div>
+
     <div class="invoice-block">
       <div class="invoice-title">福祉タクシー利用料（領 収 書）</div>
       <div class="invoice-header">
@@ -106,11 +112,18 @@
       const origin = document.getElementById("origin").value;
       const destination = document.getElementById("destination").value;
       const timeStr = document.getElementById("rideTime").value;
-      const [hour] = timeStr.split(":" ).map(Number);
+      const [hour] = timeStr.split(":").map(Number);
       const isNight = (hour >= 22 || hour < 5);
+      const waypoints = ["waypoint1", "waypoint2", "waypoint3"].map(id => {
+        const val = document.getElementById(id).value.trim();
+        return val ? { location: val, stopover: true } : null;
+      }).filter(Boolean);
 
       const service = new google.maps.DirectionsService();
-      service.route({ origin, destination, travelMode: google.maps.TravelMode.DRIVING }, function(response, status) {
+      service.route({
+        origin, destination, waypoints,
+        travelMode: google.maps.TravelMode.DRIVING
+      }, function(response, status) {
         if (status !== 'OK') {
           document.getElementById("result").innerHTML = "ルート取得失敗：" + status;
           return;
@@ -122,12 +135,7 @@
         distanceKmGlobal = distanceKm;
 
         let fare = 341;
-        let breakdown = [
-          `出発地：${origin}`,
-          `目的地：${destination}`,
-          "距離基本運賃：¥341"
-        ];
-
+        let breakdown = ["距離基本運賃：¥341"];
         if (distanceKm > 1) {
           const addFare = Math.ceil(distanceKm - 1) * 330;
           fare += addFare;
@@ -174,31 +182,43 @@
         const wheelchair = document.querySelector('input[name="wheelchair"]:checked').value;
         if (wheelchair === "yes") breakdown.push("貸し出し車椅子：¥0");
 
-        document.getElementById("result").innerHTML = `合計運賃：¥${fare.toLocaleString()}（${isNight ? "深夜料金適用" : "通常料金"}）`;
-        document.getElementById("details").innerHTML = `距離：${distanceKm.toFixed(2)} km`;
-        document.getElementById("breakdown").innerHTML = `<h4>内訳</h4><ul><li>${breakdown.join('</li><li>')}</li></ul>`;
+        const pickupBase = "千葉県佐倉市上志津1668-9";
+        const pickupService = new google.maps.DistanceMatrixService();
+        pickupService.getDistanceMatrix({
+          origins: [pickupBase], destinations: [origin],
+          travelMode: google.maps.TravelMode.DRIVING
+        }, function(pickupResponse, pickupStatus) {
+          if (pickupStatus !== 'OK') {
+            document.getElementById("result").innerHTML = "迎車距離取得失敗：" + pickupStatus;
+            return;
+          }
+
+          const pickupDistance = pickupResponse.rows[0].elements[0].distance.value / 1000;
+          if (pickupDistance > 2) {
+            const pickupFare = Math.ceil((pickupDistance - 2) / 2) * 750;
+            fare += pickupFare;
+            breakdown.push(`迎車料金（${pickupDistance.toFixed(2)}km）：¥${pickupFare}`);
+          } else {
+            breakdown.push("迎車料金（2km以内）：¥0");
+          }
+
+          document.getElementById("result").innerHTML = `合計運賃：¥${fare.toLocaleString()}（${isNight ? "深夜料金適用" : "通常料金"}）`;
+          document.getElementById("details").innerHTML = `距離：${distanceKm.toFixed(2)} km`;
+          document.getElementById("breakdown").innerHTML = `<h4>内訳</h4><ul><li>${breakdown.join('</li><li>')}</li></ul>`;
+        });
       });
     }
 
     function generatePDF() {
       const breakdownList = document.querySelector('#breakdown ul');
-      const origin = document.getElementById("origin").value;
-      const destination = document.getElementById("destination").value;
-
       if (!breakdownList) {
         alert('先に「運賃を計算する」を実行してください。');
         return;
       }
-
-      const tableHTML = [
-        `<tr><td>出発地：${origin}</td></tr>`,
-        `<tr><td>目的地：${destination}</td></tr>`,
-        ...Array.from(breakdownList.children).map(item => `<tr><td>${item.innerText}</td></tr>`),
-        `<tr><td><strong>走行距離：${distanceKmGlobal.toFixed(2)} km</strong></td></tr>`,
-        `<tr><td><strong>${document.getElementById("result").innerText}</strong></td></tr>`
-      ].join('');
-
-      const fullTable = `<tr><th>内訳明細</th></tr>` + tableHTML;
+      const tableHTML = Array.from(breakdownList.children).map(item => `<tr><td>${item.innerText}</td></tr>`).join('');
+      const distanceRow = `<tr><td><strong>走行距離：${distanceKmGlobal.toFixed(2)} km</strong></td></tr>`;
+      const finalRow = `<tr><td><strong>` + document.getElementById("result").innerText + `</strong></td></tr>`;
+      const fullTable = `<tr><th>内訳明細</th></tr>` + tableHTML + distanceRow + finalRow;
 
       document.getElementById("invoice-table").innerHTML = fullTable;
       document.getElementById("invoice-table-copy").innerHTML = fullTable;
